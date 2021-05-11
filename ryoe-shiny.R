@@ -62,8 +62,29 @@ pbp_all_un <- read_csv(url("https://raw.githubusercontent.com/tejseth/RYOE/main/
 
 #pbp_all_un <- read.csv(file = 'pbp_all_un.csv')
 
-ids <- teams_colors_logos %>%
+pbp_all_un <- pbp_all_un %>%
+  filter(season <= 2020)
+
+teams <- nflfastR::teams_colors_logos %>%
+  filter(!team_abbr %in% c("LAR", "SD", "STL", "OAK"))
+
+# team abbreviations for dropdown menus
+ids <- teams %>%
   pull(team_abbr)
+
+pbp_all_un <- pbp_all_un %>%
+  group_by(rusher_player_name) %>%
+  mutate(count = n()) %>%
+  mutate(over_five = case_when(
+    count >= 5 ~ "Yes",
+    count < 5 ~ "No"
+  )) %>%
+  ungroup()
+
+pbp_all_un2 <- pbp_all_un %>%
+  filter(over_five == "Yes")
+  
+rushers <- unique(pbp_all_un2$rusher_player_name)
 
 options(shiny.usecairo=T)
 
@@ -98,11 +119,6 @@ ui <- fluidPage(
                  )
                ),
                
-               fluidRow(
-                 column(12, align = "center",
-                        actionButton("update", "Update", width = '50%')
-                 )),
-               
                mainPanel(
                  plotOutput(outputId = "rusher_graph",
                             width = "100%",
@@ -133,18 +149,44 @@ ui <- fluidPage(
              ),
             )
            ),
-           fluidRow(
-             column(12, align = "center",
-                    actionButton("update", "Update", width = '50%')
-             
-             )
-          ),
           mainPanel(
             plotOutput(outputId = "team_graph",
-                       width = "100%"),
+                       width = "100%",
+                       height = "50%"),
             tableOutput(outputId = "team_table_1"),
             tableOutput(outputId = "team_table_2")
           ),
+      ),
+  tabPanel('RB Comparison',
+           fluidRow(
+             column(4, align = "center",
+                    tags$h3('Parameters'),
+              selectInput("player_1",
+                          "Player 1", 
+                          c(sort(unique(as.character(rushers)))), selected = "A.Jones"),
+              selectInput("player_2",
+                          "Player 2", 
+                          c(sort(unique(as.character(rushers)))), selected = "N.Chubb"),
+              selectInput("player_3",
+                          "Player 3", 
+                          c(sort(unique(as.character(rushers)))), selected = "D.Henry"),
+             ),
+             sliderInput("year_range", "Year Range", value = c(2019, 2020), min = 2010, max = 2020, sep = ""),
+             sliderInput("week_range", "Weeks Range", value = c(1, 17), min = 1, max = 17),
+           ),
+           mainPanel(
+             plotOutput(outputId = "csum_graph",
+                        width = "750px", height = "500px"),
+             tableOutput(outputId = "rusher_comp_tab"), 
+             plotOutput(outputId = "perc_stacked",
+                        width = "750px", height = "500px")
+           ),
+           column(6, plotOutput(outputId = "rusher_graph_1", width = "750px", height = "500px")),
+           column(9, plotOutput(outputId = "rusher_graph_2", width = "750px", height = "500px")),
+           column(12, plotOutput(outputId = "rusher_graph_3", width = "750px", height = "500px")),
+           #plotOutput(outputId = "rusher_graph_1"),
+           #plotOutput(outputId = "rusher_graph_2"),
+           #plotOutput(outputId = "rusher_graph_3"),
       )
     )
   )
@@ -264,7 +306,7 @@ server <- function(input, output) {
     ) %>% 
     opt_row_striping() %>%
     gt_theme_538()
-  })
+  }, width = 600)
   
   output$team_graph <-  renderPlot({
     
@@ -380,7 +422,7 @@ server <- function(input, output) {
       ) %>% 
       opt_row_striping() %>%
       gt_theme_538()
-  })
+  }, width = 600)
   
   output$team_table_2 <- render_gt({
     
@@ -439,7 +481,306 @@ server <- function(input, output) {
       ) %>% 
       opt_row_striping() %>%
       gt_theme_538()
-  })
+  }, width = 600)
+  
+  output$csum_graph <- renderPlot({
+    
+    rushers_needed <- c(input$player_1, input$player_2, input$player_3)
+    
+    filtered_pbp <- pbp_all_un %>%
+      filter(!is.na(ryoe)) %>%
+      filter(rusher_player_name %in% rushers_needed) %>%
+      filter(season >= input$year_range[1] & season <= input$year_range[2]) %>%
+      filter(week >= input$week_range[1] & week <= input$week_range[2])
+    
+    filtered_pbp$csum <- ave(filtered_pbp$ryoe, filtered_pbp$rusher_player_name, FUN=cumsum)
+    
+    filtered_pbp$rush_att <- ave(filtered_pbp$ryoe, filtered_pbp$rusher_player_name, FUN = seq_along)
+    
+    filtered_pbp$Rusher <- filtered_pbp$rusher_player_name
+    
+    filtered_pbp %>%
+      ggplot( aes(x=rush_att, y=csum, group=Rusher, color=Rusher)) +
+      geom_line(size = 2) +
+      theme_bw() + 
+      scale_color_brewer(palette = "Dark2") +
+      labs(x = "Rushing Attempts",
+           y = "Cumulative RYOE",
+           title = "Cumulative Rushing Yards Over Expected (RYOE)",
+           subtitle = paste0(input$year_range[1], "-", input$year_range[2], ", weeks ", input$week_range[1], "-", input$week_range[2]),
+           caption = "By Tej Seth | @mfbanalytics") +
+      theme(
+        panel.grid.minor = element_blank(),
+        plot.title = element_text(face = "bold", size = 20, hjust = 0.5),
+        plot.subtitle = element_text(size = 16, hjust = 0.5),
+        axis.text = element_text(size = 14),
+        axis.title.y = element_text(size = 14),
+        axis.title.x = element_text(size = 14),
+        legend.text=element_text(size=14),
+        legend.title = element_text(face = "bold", size=16)) +
+      scale_y_continuous(breaks = scales::pretty_breaks(n = 10)) +
+      scale_x_continuous(breaks = scales::pretty_breaks(n = 10))
+  }, height = 500, width = 750)
+  
+  output$perc_stacked <- renderPlot({
+    
+    rushers_needed <- c(input$player_1, input$player_2, input$player_3)
+    
+    filtered_pbp <- pbp_all_un %>%
+      filter(!is.na(ryoe)) %>%
+      filter(rusher_player_name %in% rushers_needed) %>%
+      filter(season >= input$year_range[1] & season <= input$year_range[2]) %>%
+      filter(week >= input$week_range[1] & week <= input$week_range[2])
+    
+    filtered_pbp$csum <- ave(filtered_pbp$ryoe, filtered_pbp$rusher_player_name, FUN=cumsum)
+    
+    filtered_pbp$rush_att <- ave(filtered_pbp$ryoe, filtered_pbp$rusher_player_name, FUN = seq_along)
+    
+    filtered_pbp$Rusher <- filtered_pbp$rusher_player_name
+    
+    filtered_pbp <- filtered_pbp %>%
+      mutate(Label = case_when(
+        ryoe < 0 ~ "4: Less than Zero RYOE",
+        ryoe >= 0 & ryoe < 5 ~ "3: 0 to 5 RYOE",
+        ryoe >= 5 & ryoe < 15 ~ "2: 5 to 15 RYOE",
+        ryoe >= 15 ~ "1: 15+ RYOE"
+      ))
+    
+    grouped <- filtered_pbp %>%
+      group_by(Rusher, Label) %>%
+      summarize(count = n())
+    
+    ggplot(filtered_pbp, aes(fill=Label, y=count, x=Rusher)) + 
+      geom_bar(position="fill", stat="identity") +
+      theme_minimal() +
+      scale_fill_brewer(palette = "Spectral") +
+      labs(x = "Rusher",
+           y = "RYOE Percentage",
+           title = "Each Rusher's Rushing Yards Over Expected Make-Up",
+           caption = "By Tej Seth | @mfbanalytics",
+           subtitle = paste0(input$year_range[1], "-", input$year_range[2], ", weeks ", input$week_range[1], "-", input$week_range[2]))+
+      theme(
+        plot.title = element_text(face = "bold", size = 18, hjust = 0.5),
+        axis.title.y = element_text(size = 14),
+        axis.title.x = element_text(size = 14),
+        axis.text = element_text(size = 16),
+        legend.text=element_text(size=14),
+        legend.title = element_text(face = "bold", size=16),
+        plot.subtitle = element_text(size = 16, hjust = 0.5)) +
+      scale_y_continuous(breaks = scales::pretty_breaks(n = 10))
+  }, height = 500, width = 750)
+  
+  output$rusher_comp_tab <- render_gt({
+    
+    rushers_needed <- c(input$player_1, input$player_2, input$player_3)
+    
+    filtered_pbp <- pbp_all_un %>%
+      filter(!is.na(ryoe)) %>%
+      filter(rusher_player_name %in% rushers_needed) %>%
+      filter(season >= input$year_range[1] & season <= input$year_range[2]) %>%
+      filter(week >= input$week_range[1] & week <= input$week_range[2])
+    
+    rushers_logos <- filtered_pbp %>%
+      group_by(rusher_player_name, posteam) %>%
+      summarize(count = n()) %>%
+      arrange(rusher_player_name, count) %>%
+      top_n(1) %>%
+      left_join(teams_colors_logos, by = c("posteam" = "team_abbr"))
+    
+    rusher_tab <- filtered_pbp %>%
+      group_by(rusher_player_name) %>%
+      summarize(rushes = n(),
+                epa_per_rush = mean(epa),
+                avg_ryoe = mean(ryoe))
+    
+    rusher_tab <- rusher_tab %>%
+      left_join(rushers_logos, by = "rusher_player_name")
+    
+    rusher_tab <- rusher_tab %>%
+      arrange(desc(avg_ryoe)) %>%
+      mutate(rank = row_number()) %>%
+      select(rank, rusher_player_name, team_logo_espn, rushes, epa_per_rush, avg_ryoe)
+    
+    rusher_tab <- rusher_tab %>%
+      arrange(rank) %>%
+      mutate_if(is.numeric, ~round(., 2))
+    
+    rusher_tab %>% gt() %>%
+      text_transform(
+        locations = cells_body(c(team_logo_espn)),
+        fn = function(x){
+          web_image(
+            url = x,
+            height = px(35)
+          )
+        }
+      ) %>% 
+      cols_label(
+        rank = "Rank",
+        rusher_player_name = "Rusher",
+        team_logo_espn = "",
+        rushes = "Rushes",
+        epa_per_rush = "EPA/rush",
+        avg_ryoe = "RYOE/rush") %>%
+      data_color(
+        columns = c(avg_ryoe),
+        colors = scales::col_numeric(
+          palette = c("white", "#3fc1c9"),
+          domain = NULL
+        )
+      ) %>% 
+      tab_source_note(
+        source_note = md("By Tej Seth | @mfbanalytics <br>Inspiration: @thomas_mock")
+      ) %>% 
+      opt_align_table_header(align = "center") %>%
+      tab_header(
+        title = md(paste0("Rushing Yards Over Expected Comparison")),
+        subtitle = md(paste0(input$year_range[1], "-", input$year_range[2], ", weeks ", input$week_range[1], "-", input$week_range[2]))
+      ) %>% 
+      opt_row_striping() %>%
+      gt_theme_538()
+    
+    
+  }, width = 600)
+  
+  
+  output$rusher_graph_1 <- renderPlot({
+    
+    the_rusher_grouped <- pbp_all_un %>%
+      filter(!is.na(ryoe)) %>%
+      filter(rusher_player_name == input$player_1) %>%
+      group_by(rusher_player_name, season, posteam) %>%
+      summarize(avg_ryoe = mean(ryoe)) %>%
+      left_join(teams_colors_logos, by = c("posteam" = "team_abbr"))
+    
+    min_year = min(the_rusher_grouped$season)
+    max_year = max(the_rusher_grouped$season)
+    
+    rushers_grouped <- pbp_all_un %>%
+      filter(!is.na(ryoe)) %>%
+      filter(season >= min_year & season <= max_year) %>%
+      group_by(rusher_player_name, season) %>%
+      summarize(rushes = n(),
+                avg_ryoe = mean(ryoe)) %>%
+      filter(rushes >= 75) %>%
+      filter(avg_ryoe <= 2)
+    
+    ggplot() +
+      geom_jitter(data = rushers_grouped, aes(x = season, y = avg_ryoe), color = "black", 
+                  width = 0.025, alpha = 0.35, size = 3) + 
+      geom_line(data = the_rusher_grouped, aes(x = season, y = avg_ryoe, color = team_color)) +
+      geom_image(data = the_rusher_grouped, aes(x = season, y = avg_ryoe, image = team_logo_espn), 
+                 size = 0.07, asp = 16 / 9) +
+      theme_bw() +
+      scale_color_identity(aesthetics =  c("fill", "color")) +
+      labs(x = "Season", 
+           y = "Average RYOE",
+           title = paste0(input$player_1, "'s Rushing Yards Over Expected by Season"),
+           subtitle = "RYOE is a xgboost model, min. of 75 designed rushes for each dot",
+           caption = "By Tej Seth | @mfbanalytics") +
+      theme(
+        legend.position = "None",
+        plot.title = element_text(face = "bold", size = 20, hjust = 0.5),
+        plot.subtitle = element_text(size = 12, hjust = 0.5),
+        axis.text = element_text(size = 14),
+        axis.title.y = element_text(size = 14)) +
+      geom_hline(yintercept =  0, color = "blue", linetype = "dashed", alpha=0.9) +
+      scale_y_continuous(breaks = scales::pretty_breaks(n = 5)) +
+      scale_x_continuous(breaks = unique(the_rusher_grouped$season))
+      
+
+  }, width = 750, height= 500)
+  
+  output$rusher_graph_2 <- renderPlot({
+    
+    the_rusher_grouped <- pbp_all_un %>%
+      filter(!is.na(ryoe)) %>%
+      filter(rusher_player_name == input$player_2) %>%
+      group_by(rusher_player_name, season, posteam) %>%
+      summarize(avg_ryoe = mean(ryoe)) %>%
+      left_join(teams_colors_logos, by = c("posteam" = "team_abbr"))
+    
+    min_year = min(the_rusher_grouped$season)
+    max_year = max(the_rusher_grouped$season)
+    
+    rushers_grouped <- pbp_all_un %>%
+      filter(!is.na(ryoe)) %>%
+      filter(season >= min_year & season <= max_year) %>%
+      group_by(rusher_player_name, season) %>%
+      summarize(rushes = n(),
+                avg_ryoe = mean(ryoe)) %>%
+      filter(rushes >= 75) %>%
+      filter(avg_ryoe <= 2)
+    
+    ggplot() +
+      geom_jitter(data = rushers_grouped, aes(x = season, y = avg_ryoe), color = "black", 
+                  width = 0.025, alpha = 0.35, size = 3) + 
+      geom_line(data = the_rusher_grouped, aes(x = season, y = avg_ryoe, color = team_color)) +
+      geom_image(data = the_rusher_grouped, aes(x = season, y = avg_ryoe, image = team_logo_espn), 
+                 size = 0.07, asp = 16 / 9) +
+      theme_bw() +
+      scale_color_identity(aesthetics =  c("fill", "color")) +
+      labs(x = "Season", 
+           y = "Average RYOE",
+           title = paste0(input$player_2, "'s Rushing Yards Over Expected by Season"),
+           subtitle = "RYOE is a xgboost model, min. of 75 designed rushes for each dot",
+           caption = "By Tej Seth | @mfbanalytics") +
+      theme(
+        legend.position = "None",
+        plot.title = element_text(face = "bold", size = 20, hjust = 0.5),
+        plot.subtitle = element_text(size = 12, hjust = 0.5),
+        axis.text = element_text(size = 14),
+        axis.title.y = element_text(size = 14)) +
+      geom_hline(yintercept =  0, color = "blue", linetype = "dashed", alpha=0.9) +
+      scale_y_continuous(breaks = scales::pretty_breaks(n = 5)) +
+      scale_x_continuous(breaks = unique(the_rusher_grouped$season))
+  }, width = 750, height= 500)
+  
+  output$rusher_graph_3 <- renderPlot({
+    
+    the_rusher_grouped <- pbp_all_un %>%
+      filter(!is.na(ryoe)) %>%
+      filter(rusher_player_name == input$player_3) %>%
+      group_by(rusher_player_name, season, posteam) %>%
+      summarize(avg_ryoe = mean(ryoe)) %>%
+      left_join(teams_colors_logos, by = c("posteam" = "team_abbr"))
+    
+    min_year = min(the_rusher_grouped$season)
+    max_year = max(the_rusher_grouped$season)
+    
+    rushers_grouped <- pbp_all_un %>%
+      filter(!is.na(ryoe)) %>%
+      filter(season >= min_year & season <= max_year) %>%
+      group_by(rusher_player_name, season) %>%
+      summarize(rushes = n(),
+                avg_ryoe = mean(ryoe)) %>%
+      filter(rushes >= 75) %>%
+      filter(avg_ryoe <= 2)
+    
+    
+    ggplot() +
+      geom_jitter(data = rushers_grouped, aes(x = season, y = avg_ryoe), color = "black", 
+                  width = 0.025, alpha = 0.35, size = 3) + 
+      geom_line(data = the_rusher_grouped, aes(x = season, y = avg_ryoe, color = team_color)) +
+      geom_image(data = the_rusher_grouped, aes(x = season, y = avg_ryoe, image = team_logo_espn), 
+                 size = 0.07, asp = 16 / 9) +
+      theme_bw() +
+      scale_color_identity(aesthetics =  c("fill", "color")) +
+      labs(x = "Season", 
+           y = "Average RYOE",
+           title = paste0(input$player_3, "'s Rushing Yards Over Expected by Season"),
+           subtitle = "RYOE is a xgboost model, min. of 75 designed rushes for each dot",
+           caption = "By Tej Seth | @mfbanalytics") +
+      theme(
+        legend.position = "None",
+        plot.title = element_text(face = "bold", size = 20, hjust = 0.5),
+        plot.subtitle = element_text(size = 12, hjust = 0.5),
+        axis.text = element_text(size = 14),
+        axis.title.y = element_text(size = 14)) +
+      geom_hline(yintercept =  0, color = "blue", linetype = "dashed", alpha=0.9) +
+      scale_y_continuous(breaks = scales::pretty_breaks(n = 5)) +
+      scale_x_continuous(breaks = unique(the_rusher_grouped$season))
+  }, width = 750, height= 500)
   
 }
 

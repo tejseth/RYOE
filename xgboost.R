@@ -41,7 +41,7 @@ pbp_rp <- pbp_rp %>%
 pbp_rp <- pbp_rp %>% filter(pass==1 | rush==1)
 
 pbp_rp <- pbp_rp %>%
-  mutate(season = substr(old_game_id, 1, 4))
+  mutate(season = substr(game_id, 1, 4))
 
 pbp_rp <- pbp_rp %>%
   mutate(
@@ -130,10 +130,10 @@ rushes_2020 <- rush_attempts3 %>%
   filter(season == 2020) %>%
   select(yardline_100, quarter_seconds_remaining, half_seconds_remaining,
          game_seconds_remaining, qtr, down, goal_to_go, ydstogo, shotgun, no_huddle,
-         no_score_prob, ep, wp, def_ypc) %>%
+         no_score_prob, ep, wp, def_ypc, xpass) %>%
   mutate(index = 1:n())
 
-seasons <- 2010:2020
+seasons <- 1999:2020
 pbp <- purrr::map_df(seasons, function(x) {
   readRDS(
     url(
@@ -285,18 +285,36 @@ rushes_all_2 <- rushes_all %>%
 
 pbp_all <- pbp_rp %>%
   inner_join(rushes_all_2) %>%
-  select(season, posteam, defteam, rusher_player_name, yards_gained, x_rush_yards, epa, week, qtr, down, ydstogo, play_id, yardline_100) %>%
+  select(season, posteam, defteam, rusher_player_name, yards_gained, x_rush_yards, epa, week, qtr, down, ydstogo, play_id, yardline_100, xpass) %>%
   filter(week <= 17) %>%
-  mutate(ryoe = yards_gained - x_rush_yards + 1)
+  mutate(ryoe = yards_gained - x_rush_yards + 1.2)
 
 #pbp_all %>% group_by(season, posteam, defteam, week, play_id) %>% summarize(count = n()) %>% arrange(desc(count))
 
 pbp_all_un <- pbp_all[!duplicated(pbp_all[,c('season', 'posteam', 'defteam', 'play_id')]),]
 
-#write.csv(pbp_all_un, "pbp_all_un.csv")
+pbp_all_un <- pbp_all_un %>%
+  mutate(rusher = rusher_player_name,
+         rusher_player_name = ifelse(rusher_player_name == "W.Gallman Jr.", "W.Gallman", rusher)) %>%
+  select(-rusher)
 
-saveRDS(xgboost, 'xgboost.rds')
-  
+pbp_all_un <- pbp_all_un %>%
+  mutate(rusher = rusher_player_name,
+         rusher_player_name = ifelse(rusher_player_name == "M.Ingram II", "M.Ingram", rusher)) %>%
+  select(-rusher)
+
+pbp_all_un <- pbp_all_un %>%
+  filter(season <= 2020)
+
+pbp_all_un_1 <- pbp_all_un %>%
+  filter(season <= 2010)
+
+pbp_all_un_2 <- pbp_all_un %>%
+  filter(season > 2010)
+
+write.csv(pbp_all_un_1, "pbp_all_un_1.csv")
+write.csv(pbp_all_un_2, "pbp_all_un_2.csv")
+
 
     
 

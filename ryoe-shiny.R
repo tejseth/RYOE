@@ -58,12 +58,9 @@ gt_theme_538 <- function(data,...) {
       ...
     )}
 
-pbp_all_un <- read_csv(url("https://raw.githubusercontent.com/tejseth/RYOE/main/pbp_all_un.csv"))
-
-#pbp_all_un <- read.csv(file = 'pbp_all_un.csv')
-
-pbp_all_un <- pbp_all_un %>%
-  filter(season <= 2020)
+pbp_all_un_1 <- read_csv(url("https://raw.githubusercontent.com/tejseth/RYOE/main/pbp_all_un_1.csv"))
+pbp_all_un_2 <- read_csv(url("https://raw.githubusercontent.com/tejseth/RYOE/main/pbp_all_un_2.csv"))
+pbp_all_un <- rbind(pbp_all_un_1, pbp_all_un_2)
 
 teams <- nflfastR::teams_colors_logos %>%
   filter(!team_abbr %in% c("LAR", "SD", "STL", "OAK"))
@@ -76,8 +73,8 @@ pbp_all_un <- pbp_all_un %>%
   group_by(rusher_player_name) %>%
   mutate(count = n()) %>%
   mutate(over_five = case_when(
-    count >= 5 ~ "Yes",
-    count < 5 ~ "No"
+    count >= 10 ~ "Yes",
+    count < 10 ~ "No"
   )) %>%
   ungroup()
 
@@ -105,7 +102,7 @@ ui <- fluidPage(
                         selectInput(
                           inputId =  "season",
                           label = "Season:",
-                          choices = 2010:2020,
+                          choices = 1999:2020,
                           selected = 2020
                         ),
                         
@@ -144,7 +141,7 @@ ui <- fluidPage(
              selectInput(
                inputId =  "team_season",
                label = "Season:",
-               choices = 2010:2020,
+               choices = 1999:2020,
                selected = 2020
              ),
             )
@@ -157,13 +154,13 @@ ui <- fluidPage(
             tableOutput(outputId = "team_table_2")
           ),
       ),
-  tabPanel('RB Comparison',
+  tabPanel('Rusher Comparison',
            fluidRow(
              column(4, align = "center",
                     tags$h3('Parameters'),
               selectInput("player_1",
                           "Player 1", 
-                          c(sort(unique(as.character(rushers)))), selected = "A.Jones"),
+                          c(sort(unique(as.character(rushers)))), selected = "A.Kamara"),
               selectInput("player_2",
                           "Player 2", 
                           c(sort(unique(as.character(rushers)))), selected = "N.Chubb"),
@@ -171,7 +168,7 @@ ui <- fluidPage(
                           "Player 3", 
                           c(sort(unique(as.character(rushers)))), selected = "D.Henry"),
              ),
-             sliderInput("year_range", "Year Range", value = c(2019, 2020), min = 2010, max = 2020, sep = ""),
+             sliderInput("year_range", "Year Range", value = c(2018, 2020), min = 1999, max = 2020, sep = ""),
              sliderInput("week_range", "Weeks Range", value = c(1, 17), min = 1, max = 17),
            ),
            mainPanel(

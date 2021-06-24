@@ -258,6 +258,7 @@ rushers_19 <- rusher_seasons %>%
 rushers_all_time <- ryoe_projs %>%
   dplyr::group_by(player, player_id) %>%
   dplyr::summarize(rushes = n(),
+            nfl_actual_ypc = mean(yards),
             nfl_ryoe = mean(ryoe),
             nfl_los_rate = sum(ryoe > 0) / rushes,
             nfl_explosive_rate = sum(ryoe > 10) / rushes) %>%
@@ -348,7 +349,7 @@ ryoe_projs %>%
   filter(quarter < 5) %>%
   filter(!is.na(down)) %>%
   filter(down > 0) %>%
-  ggplot(aes(x = seconds_left_in_half, y = exp_yards, group = as.factor(down), color = as.factor(down))) +
+  ggplot(aes(x = seconds_left_in_half, y = exp_yards, group = as.factor(box_players), color = as.factor(box_players))) +
   geom_smooth(se = FALSE, size = 2) +
   theme_reach() +
   scale_color_brewer(palette = "Paired") +
@@ -432,5 +433,24 @@ concept_stats %>%
   scale_x_continuous(breaks = scales::pretty_breaks(n = 10))
 ggsave('rushing-2.png', width = 14, height = 10, dpi = "retina")
 
+ryoe_projs <- ryoe_projs %>%
+  mutate(league = "NFL")
 
+ncaa_ryoe_projs <- ncaa_ryoe_projs %>%
+  mutate(league = "NCAA")
+
+p1 <- ryoe_projs %>%
+  select(ryoe, league)
+
+p2 <- ncaa_ryoe_projs %>%
+  select(ryoe, league)
+
+p3 <- rbind(p1, p2)
+
+p3 %>%
+  filter(ryoe < 30) %>%
+  filter(ryoe > -10) %>%
+  ggplot() +
+  geom_violin(aes(x = league, y = ryoe, fill = league)) +
+  theme_reach()
 

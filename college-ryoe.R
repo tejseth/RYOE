@@ -165,22 +165,80 @@ f = mean(ncaa_ryoe_projs$yards) - mean(ncaa_ryoe_projs$exp_yards)
 ncaa_ryoe_projs <- ncaa_ryoe_projs %>%
   mutate(ryoe = yards - exp_yards + f)
 
+###############################################################################
+ncaa_ryoe_projs <- ncaa_ryoe_projs %>%
+  mutate(half = case_when(
+    quarter < 3 ~ "First Half",
+    quarter >= 3 ~ "Second Half"
+  ))
+
+ncaa_ryoe_projs %>% 
+  filter(quarter < 5) %>%
+  filter(box_players > 4) %>%
+  filter(box_players < 9) %>%
+  ggplot(aes(x = seconds_left_in_half, y = yards, group = as.factor(box_players), color = as.factor(box_players))) +
+  geom_smooth(se = FALSE, size = 2) +
+  theme_reach() +
+  geom_vline(xintercept = 900, linetype = "dashed") +
+  scale_color_brewer(palette = "Paired") +
+  labs(x = "Seconds Left in Half",
+       y = "Rushing yards",
+       title = "How Rushing Yards Changes by Time and Down in College",
+       subtitle = "Using PFF data from 2015-2020, QB kneeldowns excluded",
+       color = "Box Players") +
+  scale_x_reverse(breaks = pretty_breaks(n = 10)) +
+  scale_y_continuous(breaks = pretty_breaks(n = 10)) +
+  theme(legend.position = "bottom",
+        strip.text.x = element_text(size = 14)) +
+  facet_wrap(~half)
+ggsave('running-1.png', width = 15, height = 10, dpi = "retina")
+
+down_distance <- ncaa_ryoe_projs %>%
+  filter(down > 0) %>%
+  filter(distance < 16) %>%
+  group_by(down, distance) %>%
+  summarize(count = n(),
+            avg_yards = mean(yards))
+
+down_distance %>%
+  filter(down < 4) %>%
+  ggplot(aes(x = distance, y = down)) +
+  geom_tile(aes(fill = avg_yards)) +
+  geom_text(aes(label = round(avg_yards, digits = 2)), color = "white") +
+  scale_fill_gradient(high = "darkorange", low = "darkblue") +
+  theme_reach() +
+  scale_y_reverse() +
+  scale_x_continuous(breaks = pretty_breaks(n = 15)) +
+  labs(x = "Distance to Sticks",
+       y = "Down",
+       title = "How Down and Distance to Sticks Affects Rushing Yards",
+       subtitle = "Using PFF data from 2015-2020, QB kneeldowns excluded",
+       fill = "Average Yards") +
+  theme(legend.position = "bottom",
+        legend.box = "vertical",
+        axis.text = element_text(size = 14))
+ggsave('running-2.png', width = 15, height = 10, dpi = "retina")
+
 ncaa_rushing_season_stats <- ncaa_ryoe_projs %>%
   dplyr::group_by(season, player, offense) %>%
   dplyr::summarize(rushes = n(),
+            actual_ypc = mean(yards),
             avg_ryoe = mean(ryoe),
             los_rate = sum(ryoe > 0) / n(),
-            explosive_rate = sum(ryoe > 10) / n()) %>%
+            explosive_rate = sum(ryoe > 10) / n(),
+            avg_box = mean(box_players)) %>%
   dplyr::filter(rushes >= 100) %>%
   dplyr::arrange(-avg_ryoe) %>%
   dplyr::arrange(season) %>%
   dplyr::group_by(player) %>%
   dplyr::mutate(next_rushes = lead(rushes),
+                next_actual_ypc = lead(actual_ypc),
          next_avg_ryoe = lead(avg_ryoe),
          next_los_rate = lead(los_rate),
          next_explosive_rate = lead(explosive_rate))
 
 summary(lm(next_rushes ~ rushes, data=ncaa_rushing_season_stats))$r.squared #0.14
+summary(lm(next_actual_ypc ~ actual_ypc, data=ncaa_rushing_season_stats))$r.squared #0.11
 summary(lm(next_avg_ryoe ~ avg_ryoe, data=ncaa_rushing_season_stats))$r.squared #0.13
 summary(lm(next_los_rate ~ los_rate, data=ncaa_rushing_season_stats))$r.squared #0.13
 summary(lm(next_explosive_rate ~ explosive_rate, data=ncaa_rushing_season_stats))$r.squared #0.11
@@ -208,14 +266,15 @@ ncaa_rushing_career <- ncaa_ryoe_projs %>%
             ncaa_avg_ryoe = mean(ryoe),
             ncaa_sum_ryoe = sum(ryoe),
             ncaa_los_rate = sum(ryoe > 0) / ncaa_rushes,
-            ncaa_explosive_rate = sum(ryoe > 10) / ncaa_rushes) %>%
+            ncaa_explosive_rate = sum(ryoe > 10) / ncaa_rushes,
+            avg_box_players = mean(box_players)) %>%
   dplyr::filter(ncaa_rushes >= 200) %>%
   dplyr::arrange(-ncaa_avg_ryoe)
 
 nfl_ncaa_rushing <- rushers_all_time %>%
   inner_join(ncaa_rushing_career, by = c("player"))
 
-summary(lm(nfl_ryoe ~ ncaa_actual_ypc, data=nfl_ncaa_rushing))$r.squared #0.18
+summary(lm(nfl_actual_ypc ~ ncaa_actual_ypc, data=nfl_ncaa_rushing))$r.squared #0.09
 summary(lm(nfl_ryoe ~ ncaa_avg_ryoe, data=nfl_ncaa_rushing))$r.squared #0.21
 summary(lm(nfl_ryoe ~ ncaa_sum_ryoe, data=nfl_ncaa_rushing))$r.squared #0.22
 summary(lm(nfl_ryoe ~ ncaa_explosive_rate, data=nfl_ncaa_rushing))$r.squared #0.18
@@ -245,10 +304,11 @@ nfl_ncaa_rushing %>%
   labs(x = "NCAA RYOE/Attempt",
        y = "NFL RYOE/Attempt",
        title = "How NCAA RYOE/Attempt Compares to NFL RYOE/Attempt",
-       subtitle = "RYOE = Rushing Yards Over Expected, minimum of 200 rush attempts in both leagues") +
+       subtitle = "RYOE = Rushing Yards Over Expected, minimum of 200 rush attempts in college, 400 in the NFL") +
   scale_x_continuous(breaks = pretty_breaks(n = 10)) +
   scale_y_continuous(breaks = pretty_breaks(n = 10)) +
   annotate("text", x = 0.2, y = 0.9, label = "R^2 = 0.22", size = 5)
+ggsave('running-3.png', width = 15, height = 10, dpi = "retina")
 
 nfl_ncaa_rushing %>%
   filter(player != "Lamar Jackson") %>%
@@ -261,10 +321,11 @@ nfl_ncaa_rushing %>%
   labs(x = "NCAA Explosive Rate (RYOE > 10)",
        y = "NFL Explosive Rate (RYOE > 10)",
        title = "How NCAA Explosive Run Rate Compares to NFL Explosive Run Rate",
-       subtitle = "RYOE = Rushing Yards Over Expected, minimum of 200 rush attempts in both leagues") +
+       subtitle = "RYOE = Rushing Yards Over Expected, minimum of 200 rush attempts in college, 400 in the NFL") +
   scale_x_continuous(breaks = pretty_breaks(n = 5)) +
   scale_y_continuous(breaks = pretty_breaks(n = 5))  +
-  annotate("text", x = 0.05, y = 0.075, label = "R^2 = 0.35", size = 5)
+  annotate("text", x = 0.048, y = 0.068, label = "R^2 = 0.35", size = 5)
+ggsave('running-5.png', width = 15, height = 10, dpi = "retina")
 
 nfl_ncaa_long <- nfl_ncaa_rushing %>%
   select(player, nfl_ryoe, ncaa_actual_ypc, ncaa_avg_ryoe, ncaa_los_rate, ncaa_explosive_rate)
@@ -308,7 +369,7 @@ p + geom_text(
 draft_picks <- espnscrapeR::get_sharpe_data(dataset = "draft_picks")
 
 draft_select <- draft_picks %>%
-  select(round, pick, pfr_name, position) %>%
+  select(round, pick, pfr_name, position, season) %>%
   filter(position %in% c("QB", "RB"))
 
 ncaa_rushing_career_rbs <- ncaa_rushing_career %>%
@@ -328,9 +389,14 @@ ncaa_draft_long <- ncaa_draft_long %>%
     type == "ncaa_sum_ryoe" ~ "Total RYOE"
   ))
 
-ncaa_draft_long %>%
-  ggplot(aes(x = value, y = pick, color = type2)) +
-  geom_point(aes(fill = type), alpha = 0.85, shape = 21, color = "black", size = 4) +
+data_text <- data.frame(
+  label = c("R^2 = 0.08", "R^2 = 0.05", "R^2 = 0.09", "R^2 = 0.16"),
+  type2   = c("Average RYOE", "Explosive RYOE Rate", "Positive RYOE Rate", "Total RYOE")
+)
+
+p2 <- ncaa_draft_long %>%
+  ggplot(aes(x = value, y = pick)) +
+  geom_point(aes(fill = type2), alpha = 0.85, shape = 21, color = "black", size = 4) +
   geom_smooth(se = FALSE, color = "gray", method = "lm") +
   theme_reach() +
   scale_fill_brewer(palette = "Accent") +
@@ -342,11 +408,19 @@ ncaa_draft_long %>%
        subtitle = "Total RYOE has the biggest effect on draft position while explosive rate has the smallest of the 4 metrics") +
   theme(strip.text.x = element_text(size = 14))
 
-summary(lm(pick ~ rushes, data=ncaa_rushing_career_rbs))$r.squared #0.05
-summary(lm(pick ~ avg_ryoe,  data=ncaa_rushing_career_rbs))$r.squared #0.10
-summary(lm(pick ~ sum_ryoe,  data=ncaa_rushing_career_rbs))$r.squared #0.19
-summary(lm(pick ~ los_rate,  data=ncaa_rushing_career_rbs))$r.squared #0.08
-summary(lm(pick ~ explosive_rate,  data=ncaa_rushing_career_rbs))$r.squared #0.09
+p2 + geom_text(
+  data    = dat_text,
+  mapping = aes(x = -Inf, y = -Inf, label = label),
+  hjust   = -0.1,
+  vjust   = -1
+)
+ggsave('running-7.png', width = 15, height = 10, dpi = "retina")
+
+summary(lm(pick ~ ncaa_rushes, data=ncaa_rushing_career_rbs))$r.squared #0.05
+summary(lm(pick ~ ncaa_avg_ryoe,  data=ncaa_rushing_career_rbs))$r.squared #0.08
+summary(lm(pick ~ ncaa_sum_ryoe,  data=ncaa_rushing_career_rbs))$r.squared #0.17
+summary(lm(pick ~ ncaa_los_rate,  data=ncaa_rushing_career_rbs))$r.squared #0.09
+summary(lm(pick ~ ncaa_explosive_rate,  data=ncaa_rushing_career_rbs))$r.squared #0.05
 
 draft_pick_lm <- lm(pick ~ sum_ryoe + los_rate + explosive_rate, data = ncaa_rushing_career_rbs)
 summary(draft_pick_lm)
@@ -356,19 +430,21 @@ vif(draft_pick_lm)
 
 ncaa_rushing_career_rbs %>% 
   filter(round < 8) %>%
-  ggplot(aes(x = round, y = ncaa_sum_ryoe, fill = ncaa_sum_ryoe)) + 
+  filter(season > 2019) %>%
+  filter(player != "Malcolm Perry") %>%
+  ggplot(aes(x = round, y = ncaa_explosive_rate, fill = ncaa_explosive_rate)) + 
   geom_quasirandom(pch = 21, size = 5.5, width = 0.2) + 
-  ggrepel::geom_text_repel(aes(label = player), size = 2, box.padding = 0.35) +
+  ggrepel::geom_text_repel(aes(label = player), size = 4, box.padding = 0.35) +
   scale_fill_viridis_c("",  guide = FALSE) + 
   theme_reach() +
   labs(
-    title = "Total College Rushing Yards Over Expected is the Best Indicator of Draft Position",
-    subtitle = "Running backs drafted from 205 to 2020, R^2 = 0.19",
+    title = "The Explosivness of Each Running Back Drafted in 2019 or 2020",
     x = "Round Drafted",
-    y = "Total College RYOE"
+    y = "College Explosive Rate"
   ) +
   scale_x_continuous(breaks = scales::pretty_breaks(n = 7)) +
   scale_y_continuous(breaks = scales::pretty_breaks(n = 10)) 
+ggsave('running-8.png', width = 15, height = 10, dpi = "retina")
 
 teams <- read_csv(url("https://raw.githubusercontent.com/saiemgilani/cfbfastR-data/master/teams/teams_colors_logos.csv"))
 
@@ -436,7 +512,8 @@ part_3 %>%
        subtitle = "83% of NFL running backs fall between -0.5 and 0.5 RYOE/attempt however it's only 55% in college") +
   scale_x_continuous(breaks = pretty_breaks(n = 10)) +
   theme(strip.text.y = element_text(size = 14, colour = "black", face = "bold", angle = 360))
-ggsave('rushing-1.png', width = 14, height = 10, dpi = "retina")
+ggsave('running-4.png', width = 14, height = 10, dpi = "retina")
+
 
 
 

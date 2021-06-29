@@ -237,7 +237,7 @@ ncaa_rushing_season_stats <- ncaa_ryoe_projs %>%
          next_los_rate = lead(los_rate),
          next_explosive_rate = lead(explosive_rate))
 
-summary(lm(next_rushes ~ rushes, data=ncaa_rushing_season_stats))$r.squared #0.14
+summary(lm(next_rushes ~ rushes, data=ncaa_rushing_season_stats))$r.squared #0.15
 summary(lm(next_actual_ypc ~ actual_ypc, data=ncaa_rushing_season_stats))$r.squared #0.11
 summary(lm(next_avg_ryoe ~ avg_ryoe, data=ncaa_rushing_season_stats))$r.squared #0.13
 summary(lm(next_los_rate ~ los_rate, data=ncaa_rushing_season_stats))$r.squared #0.13
@@ -257,12 +257,13 @@ ncaa_rushing_season_stats %>%
   annotate("text", x = -1.7, y = 3.25, label = "R = 0.36", size = 5)
 
 ncaa_rushing_stats_20 <- ncaa_rushing_season_stats %>%
-  filter(season == 2020)
+  filter(season == 2019)
 
 ncaa_rushing_career <- ncaa_ryoe_projs %>%
   dplyr::group_by(player, offense) %>%
   dplyr::summarize(ncaa_rushes = n(),
             ncaa_actual_ypc = mean(yards),
+            ncaa_exp_yards = mean(exp_yards),
             ncaa_avg_ryoe = mean(ryoe),
             ncaa_sum_ryoe = sum(ryoe),
             ncaa_los_rate = sum(ryoe > 0) / ncaa_rushes,
@@ -295,8 +296,9 @@ nfl_ncaa_rushing <- nfl_ncaa_rushing %>%
   left_join(nfl_teams, by = c("player", "player_id"))
 
 nfl_ncaa_rushing %>%
-  ggplot(aes(x = ncaa_avg_ryoe, y = nfl_ryoe)) +
-  geom_point(aes(fill = ifelse(player == "Lamar Jackson", "purple", "gray")), shape = 21, color = "black", size = 4) +
+  filter(player != "Lamar Jackson") %>%
+  ggplot(aes(x = ncaa_actual_ypc, y = ncaa_avg_ryoe)) +
+  geom_point(fill = "gray", shape = 21, color = "black", size = 4) +
   geom_smooth(method = "lm", se = FALSE, color = "gray") +
   scale_color_identity(aesthetics = c("color", "fill")) +
   theme_reach() +
@@ -306,8 +308,7 @@ nfl_ncaa_rushing %>%
        title = "How NCAA RYOE/Attempt Compares to NFL RYOE/Attempt",
        subtitle = "RYOE = Rushing Yards Over Expected, minimum of 200 rush attempts in college, 400 in the NFL") +
   scale_x_continuous(breaks = pretty_breaks(n = 10)) +
-  scale_y_continuous(breaks = pretty_breaks(n = 10)) +
-  annotate("text", x = 0.2, y = 0.9, label = "R^2 = 0.22", size = 5)
+  scale_y_continuous(breaks = pretty_breaks(n = 10)) 
 ggsave('running-3.png', width = 15, height = 10, dpi = "retina")
 
 nfl_ncaa_rushing %>%
@@ -514,9 +515,70 @@ part_3 %>%
   theme(strip.text.y = element_text(size = 14, colour = "black", face = "bold", angle = 360))
 ggsave('running-4.png', width = 14, height = 10, dpi = "retina")
 
+nfl_ncaa_no_lamar <- nfl_ncaa_rushing %>%
+  filter(player != "Lamar Jackson")
 
+nfl_ncaa_no_lamar %>%
+  ggplot(aes(x = ncaa_exp_yards, y = ncaa_avg_ryoe)) +
+  geom_point(aes(fill = as.factor(fill)), shape = 21, color = "black", size = 4, alpha = 0.6) +
+  geom_smooth(method = "lm", se = FALSE, color = "gray") +
+  scale_fill_brewer(palette = "Set1") +
+  theme_bw() +
+  geom_hline(yintercept = mean(nfl_ncaa_no_lamar$ncaa_avg_ryoe), linetype = "dashed", alpha = 0.5) +
+  geom_vline(xintercept = mean(nfl_ncaa_no_lamar$ncaa_exp_yards), linetype = "dashed", alpha = 0.5) +
+  ggrepel::geom_text_repel(aes(label = player), box.padding = 0.30) +
+  labs(x = "Expected Rushing Yards",
+       y = "Average Rushing Yards Over Expected") +
+  scale_x_continuous(breaks = pretty_breaks(n = 10)) +
+  scale_y_continuous(breaks = pretty_breaks(n = 10)) +
+  theme(legend.position = "none", 
+        axis.title = element_text(size = 14))
+ggsave('whitepaper-1.png', width = 15, height = 10, dpi = "retina")
 
+nfl_ncaa_no_lamar %>%
+  ggplot(aes(x = ncaa_explosive_rate, y = nfl_explosive_rate)) +
+  geom_point(fill = "gray", shape = 21, color = "black", size = 4, alpha = 0.9) +
+  geom_smooth(method = "lm", se = FALSE, color = "gray") + 
+  theme_bw() +
+  geom_hline(yintercept = mean(nfl_ncaa_no_lamar$nfl_explosive_rate), linetype = "dashed", alpha = 0.5) +
+  geom_vline(xintercept = mean(nfl_ncaa_no_lamar$ncaa_explosive_rate), linetype = "dashed", alpha = 0.5) +
+  ggrepel::geom_text_repel(aes(label = player), box.padding = 0.30) +
+  labs(x = "College Explosive Rate (RYOE > 10)",
+       y = "NFL Explosive Rate (RYOE > 10)") +
+  scale_x_continuous(breaks = pretty_breaks(n = 10)) +
+  scale_y_continuous(breaks = pretty_breaks(n = 10)) +
+  theme(legend.position = "none", 
+        axis.title = element_text(size = 14))
+ggsave('whitepaper-4.png', width = 15, height = 10, dpi = "retina")
 
+recruiting_data_filtered <- read.csv("~/PFF/recruiting_data_filtered.csv")
 
+rb_recruit <- recruiting_data_filtered %>%
+  filter(data.position == "HB")
+
+ncaa_small_ryoe <- ncaa_ryoe_projs %>%
+  group_by(player, player_id) %>%
+  summarize(rushes = n(),
+            avg_ryoe = mean(ryoe)) 
+
+rb_recruit <- rb_recruit %>%
+  left_join(ncaa_small_ryoe, by = c("data.player_id" = "player_id", "data.player" = "player")) 
+
+rb_recruit <- rb_recruit %>%
+  filter(rushes > 100)
+
+rb_recruit %>%
+  ggplot(aes(x = data.rating, y = avg_ryoe)) +
+  geom_point(aes(fill = data.rating, color = avg_ryoe), alpha = 0.6, size = 3, shape = 21) +
+  scale_color_viridis_c() +
+  scale_fill_viridis_c() +
+  geom_smooth(se = FALSE, color = "black", size = 2) +
+  theme_reach() +
+  labs(x = "247 Rating",
+       y = "Average RYOE",
+       title = "How Recruting Rating Affects College RYOE",
+       subtitle = "2014-2020, minimum of 100 rushes") +
+  scale_x_continuous(breaks = pretty_breaks(n = 10)) +
+  scale_y_continuous(breaks = pretty_breaks(n = 10))
 
 

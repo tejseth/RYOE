@@ -31,6 +31,21 @@ library(zoo)
 library(ggbeeswarm)
 options(scipen = 9999)
 rushing_data <- read.csv("~/Downloads/rushing_data.csv")
+epa_data <- pull_s3("epa_rd/nfl_ep_epa.csv", bucket = "ml")
+run_blocking <- pull_s3(paste0("analytics/projections/by_facet/", 'nfl', "/%i/run_blocking.csv.gz"), season_start = 2006, season_end = 2020)
+
+epa_select <- epa_data %>%
+  dplyr::select(game_id, play_id, EPA)
+
+rushing_data <- rushing_data %>%
+  left_join(epa_select, by = c("game_id", "play_id"))
+
+blocks_sums <- run_blocking %>%
+  filter(!is.na(run_blocking_grade)) %>%
+  group_by(game_id, play_id) %>%
+  summarize(total_blocks = n(),
+            pos_blocks = sum(run_blocking_grade > 0),
+            neg_blocks = sum(run_blocking_grade < 0))
 
 colSums(is.na(rushing_data))
 
@@ -38,10 +53,11 @@ theme_reach <- function() {
   theme_fivethirtyeight() +
     theme(
       legend.position = "none",
-      plot.title = element_text(size = 20, hjust = 0.5, face = "bold"),
-      plot.subtitle = element_text(size = 12, hjust = 0.5),
-      axis.title.x = element_text(size=15),
-      axis.title.y = element_text(size=15)
+      plot.title = element_text(size = 22, hjust = 0.5, face = "bold"),
+      plot.subtitle = element_text(size = 16, hjust = 0.5),
+      axis.title.x = element_text(size=17),
+      axis.title.y = element_text(size=17),
+      axis.text = element_text(size = 15)
     )
 }
 
@@ -124,22 +140,25 @@ def_ypc <- rushing_data %>%
   dplyr::summarize(def_ypc = mean(yards))
 
 rushing_data_join <- rushing_data %>%
-  left_join(def_ypc, by = c("defense", "season"))
+  left_join(def_ypc, by = c("defense", "season")) %>%
+  left_join(blocks_sums, by = c("game_id", "play_id"))
 
 rushing_data_join <- rushing_data_join %>%
   dplyr::filter(!is.na(box_players)) %>%
-  dplyr::select(offense, defense, player, player_id, season, game_id, concept_1, distance, down, 
-         quarter, seconds_left_in_half, yards_to_go, yards, box_players, def_ypc, score_diff)
+  dplyr::select(offense, defense, player, player_id, season, game_id, play_id, week, concept_1, distance, down, 
+         quarter, seconds_left_in_half, yards_to_go, yards, box_players, def_ypc, score_diff,
+         total_blocks, pos_blocks, neg_blocks, EPA) %>%
+  filter(!is.na(total_blocks))
 
 colSums(is.na(rushing_data_join))
 
 rushing_model_data <- rushing_data_join %>%
   select(distance, down, seconds_left_in_half, yards_to_go, 
-         yards, box_players, def_ypc, score_diff) %>%
+         yards, box_players, def_ypc, score_diff, total_blocks, pos_blocks, neg_blocks) %>%
   dplyr::rename(label = yards) %>%
   dplyr::select(label, everything())
 
-smp_size <- floor(0.70 * nrow(rushing_model_data))
+smp_size <- floor(0.50 * nrow(rushing_model_data))
 set.seed(2011) #go lions
 ind <- sample(seq_len(nrow(rushing_model_data)), size = smp_size)
 train <- as.matrix(rushing_model_data[ind, ])
@@ -150,7 +169,7 @@ colnames(train)
 
 ryoe_model <-
   xgboost(
-    data = train[, 2:8],
+    data = train[, 2:11],
     label = train[, 1],
     nrounds = 1000,
     objective = "reg:squarederror",
@@ -159,26 +178,25 @@ ryoe_model <-
     eta = .25
   )   
 
-imp <- xgb.importance(colnames(train), model = ryoe_model)
-xgb.plot.importance(imp)
+vip(ryoe_model)
 
 xgb.plot.tree(model = ryoe_model, trees = 1)
 
-pred_xgb <- predict(ryoe_model, test[, 2:8])
+pred_xgb <- predict(ryoe_model, test[, 2:11])
 
 yhat <- pred_xgb
 y <- test[, 1]
 postResample(yhat, y)
 
 hyper_grid <- expand.grid(max_depth = seq(3, 5, 1),
-                          eta = seq(.2, .28, .01))
+                          eta = seq(.2, .3, .01))
 xgb_train_rmse <- NULL
 xgb_test_rmse <- NULL
 
 for (j in 1:nrow(hyper_grid)) {
   set.seed(123)
   m_xgb_untuned <- xgb.cv(
-    data = train[, 2:8],
+    data = train[, 2:11],
     label = train[, 1],
     nrounds = 1000,
     objective = "reg:squarederror",
@@ -199,21 +217,20 @@ hyper_grid[which.min(xgb_test_rmse), ]
 
 rushing_model <-
   xgboost(
-    data = train[, 2:8],
+    data = train[, 2:11],
     label = train[, 1],
     nrounds = 1000,
     objective = "reg:squarederror",
     early_stopping_rounds = 3,
     max_depth = 3, #ideal max depth
-    eta = 0.25 #ideal eta
+    eta = 0.22 #ideal eta
   )   
 
-imp <- xgb.importance(colnames(train), model = rushing_model)
-xgb.plot.importance(imp)
+vip(rushing_model)
 
 xgb.plot.tree(model = rushing_model, trees = 1)
 
-pred_xgb <- predict(rushing_model, test[, 2:8])
+pred_xgb <- predict(rushing_model, test[, 2:11])
 
 yhat <- pred_xgb
 y <- test[, 1]
@@ -232,14 +249,17 @@ x
 ryoe_projs <- ryoe_projs %>%
   mutate(ryoe = yards - exp_yards + x)
 
-write.csv(ryoe_projs, 'ryoe_projs.csv')
+ryoe_github <- ryoe_projs %>%
+  dplyr::select(game_id, play_id, player, season, offense, week, exp_yards, yards, ryoe, EPA)
+
+write.csv(ryoe_github, 'ryoe_github.csv')
 
 rusher_seasons <- ryoe_projs %>%
   dplyr::group_by(player, player_id, season, offense) %>%
   dplyr::summarize(rushes = n(),
-            avg_ryoe = mean(ryoe),
-            los_rate = sum(ryoe > 0) / rushes,
-            explosive_rate = sum(ryoe > 10) / rushes) %>%
+                   exp_yards = mean(exp_yards),
+                   actual_yards = mean(yards),
+                   avg_ryoe = mean(ryoe)) %>%
   dplyr::filter(rushes >= 100) %>%
   dplyr::arrange(season) %>%
   dplyr::group_by(player) %>%
@@ -247,7 +267,7 @@ rusher_seasons <- ryoe_projs %>%
          next_avg_ryoe = lead(avg_ryoe)) %>%
   left_join(teams_colors_logos, by = c("offense" = "team_abbr"))
 
-summary(lm(next_avg_ryoe ~ avg_ryoe, data=rusher_seasons, weights = rushes))$r.squared #0.02
+summary(lm(next_avg_ryoe ~ avg_ryoe, data=rusher_seasons, weights = rushes))$r.squared #0.04
 
 rushers_20 <- rusher_seasons %>%
   filter(season == 2020)
@@ -262,7 +282,7 @@ rushers_all_time <- ryoe_projs %>%
             nfl_ryoe = mean(ryoe),
             nfl_los_rate = sum(ryoe > 0) / rushes,
             nfl_explosive_rate = sum(ryoe > 10) / rushes) %>%
-  dplyr::filter(rushes >= 400) %>%
+  dplyr::filter(rushes >= 300) %>%
   dplyr::arrange(-nfl_ryoe)
 
 next_gen_ryoe <- read.csv("~/Downloads/next_gen_ryoe.csv")
@@ -272,21 +292,20 @@ rushers_20 <- rushers_20 %>%
   filter(!is.na(next_gen_ryoe))
 
 rushers_20 %>%
-  ggplot(aes(x = avg_ryoe, y = next_gen_ryoe)) +
-  geom_point(aes(fill = team_color, color = team_color2), shape = 21, size = 4) +
+  filter(player != "Lamar Jackson") %>%
+  ggplot(aes(x = exp_yards, y = actual_yards)) +
+  geom_point(aes(fill = team_color, color = team_color2, size = rushes), shape = 21, alpha = 0.8) +
   ggrepel::geom_text_repel(aes(label = player)) +
   geom_smooth(method = "lm", se = FALSE, color = "gray") +
   scale_color_identity(aesthetics = c("fill", "color")) +
   theme_reach() +
-  scale_x_continuous(breaks = pretty_breaks(n = 10)) +
-  scale_y_continuous(breaks = pretty_breaks(n = 10)) +
-  labs(x = "Personal RYOE/Att",
-       y = "Next Gen Stats' RYOE/Att",
-       title = "How a Personal RYOE/Att Model Compares to the NFL's Model",
-       subtitle = "Minimum of 100 designed rushes in 2020") +
-  annotate("text", x = 1.1, y = -0.3, label = "Personal model is \n higher on") +
-  annotate("text", x = -0.8, y = 1.3, label = "Next gen model is \n higher on")
-ggsave('next-gen-comp.png', width = 14, height = 10, dpi = "retina")
+  scale_x_continuous(breaks = pretty_breaks(n = 7)) +
+  scale_y_continuous(breaks = pretty_breaks(n = 7)) +
+  labs(x = "Expected Rushing Yards",
+       y = "Actual Rushing Yards",
+       title = "Actual and Expected Rushing Yards, 2020",
+       subtitle = "Minimum of 100 designed rushes, bubble size is amount of rushes")
+ggsave('dobbins.png', width = 15, height = 10, dpi = "retina")
 
 rushers_19 %>%
   ggplot(aes(x = avg_ryoe, y = next_avg_ryoe)) +
@@ -330,8 +349,8 @@ rates %>%
   ggrepel::geom_text_repel(aes(label = player), box.padding = 0.25) +
   scale_color_identity(aesthetics = c("fill", "color")) +
   theme_reach() +
-  scale_x_reverse(breaks = pretty_breaks(n = 10)) +
-  scale_y_continuous(breaks = pretty_breaks(n = 10)) +
+  scale_x_reverse(breaks = pretty_breaks(n = 7)) +
+  scale_y_continuous(breaks = pretty_breaks(n = 7)) +
   labs(x = "Bad Run Rate (RYOE < 0)",
        y = "Explosive Run Rate (RYOE > 10)",
        title = "Rushers That are Explosive and Best at Avoiding Bad Runs, 2020",
@@ -453,4 +472,96 @@ p3 %>%
   ggplot() +
   geom_violin(aes(x = league, y = ryoe, fill = league)) +
   theme_reach()
+
+ryoe_projs$rush_num <- ave(ryoe_projs$ryoe, ryoe_projs$player, FUN = seq_along)
+
+ryoe_projs$csum <- ave(ryoe_projs$ryoe, ryoe_projs$player, FUN=cumsum)
+
+rush_num_stats <- ryoe_projs %>%
+  group_by(rush_num) %>%
+  summarize(count = n(),
+            avg_ryoe = mean(ryoe))
+
+rush_num_stats %>%
+  filter(count >= 5) %>%
+  filter(avg_ryoe < 2.5) %>%
+  filter(avg_ryoe > -2.5) %>%
+  ggplot(aes(x = rush_num, y = avg_ryoe)) +
+  geom_point(aes(size = count), alpha = 0.1, color = "purple") + 
+  geom_smooth(se = FALSE, size = 3) +
+  theme_bw() +
+  labs(x = "Rush Number",
+       y = "Average Rushing Yards Over Expected") +
+  theme(legend.position = "none", 
+        axis.title = element_text(size = 14))
+ggsave('whitepaper-2.png', width = 15, height = 10, dpi = "retina")
+
+ryoe_projs %>%
+  mutate(Player = player) %>%
+  filter(Player %in% c("Leonard Fournette", "Christian McCaffrey", "Dalvin Cook", 
+                       "Joe Mixon", "Alvin Kamara")) %>%
+  ggplot(aes(x = rush_num, y = csum)) +
+  geom_smooth(aes(color = Player), se = FALSE, size = 2) +
+  scale_color_brewer(palette = "Set1") +
+  theme_bw() +
+  labs(fill = "Player",
+       x = "Rush Number",
+       y = "Cumulative Rushing Yards Over Expected") +
+  theme(axis.title = element_text(size = 14),
+        legend.text=element_text(size=12))
+ggsave('whitepaper-3.png', width = 15, height = 10, dpi = "retina")
+
+ind_rushing_data <- rushing_data %>%
+  filter(!is.na(intended_run_position)) %>%
+  filter(!is.na(run_position)) %>%
+  mutate(hit_design = ifelse(intended_run_position == run_position, 1, 0))
+
+gap_stats <- ind_rushing_data %>%
+  filter(season == 2020) %>%
+  group_by(player) %>%
+  summarize(rushes = n(),
+            gap_rate = mean(hit_design)) %>%
+  filter(rushes >= 100)
+
+nfl_ryoe_2020 <- ryoe_projs %>%
+  filter(season == 2020) %>%
+  group_by(player) %>%
+  summarize(rushes = n(),
+            avg_ryoe = mean(ryoe)) %>%
+  filter(rushes >= 100) %>%
+  filter(player != "Lamar Jackson") %>%
+  filter(player != "Cam Newton")
+write.csv(nfl_ryoe_2020, "nfl_ryoe_2020.csv")
+
+rb_yac_stats_2020 <- read.csv("~/CPOE/rb_yac_stats_2020.csv")
+
+nfl_ryoe_2020 <- nfl_ryoe_2020 %>%
+  left_join(rb_yac_stats_2020, by = c("player" = "receiver"))
+
+nfl_ryoe_2020 %<>%
+  mutate(usage = rushes + receptions)
+
+nfl_ryoe_2020 %>%
+  ggplot(aes(x = avg_ryoe, y = avg_yac)) +
+  geom_point(aes(fill = ifelse(player == "Nick Chubb", "darkorange", "gray"), size = usage), color = "black", shape = 21) +
+  ggrepel::geom_text_repel(aes(label = player), size = 4.5, box.padding = 0.35) +
+  theme_reach() +
+  scale_color_identity(aesthetics = c("fill", "color")) +
+  geom_hline(yintercept = mean(nfl_ryoe_2020$avg_yac, na.rm = T), linetype = "dashed", alpha = 0.6) +
+  geom_vline(xintercept = mean(nfl_ryoe_2020$avg_ryoe, na.rm = T), linetype = "dashed", alpha = 0.6) +
+  labs(x = "Rushing Yards Over Expected",
+       y = "Yards After Catch (YAC) Over Expected",
+       title = "Rushing Yards Over Expected and YAC Over Expected, 2020",
+       subtitle = "Minimum of 100 rushes to qualify, size of bubble is rushes + receptions",
+       caption = "By Tej Seth | @tejfbanalytics | PFF") +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 7)) +
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 7))
+ggsave('chubb.png', width = 15, height = 10, dpi = "retina")  
+
+
+  
+
+
+
+
 

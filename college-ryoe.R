@@ -1,14 +1,25 @@
-ncaa_rushing_data <- read_csv("~/Downloads/ncaa_rushing_data.csv")
+library(tidyverse)
+library(rdtools)
+
+ncaa_rushing_data <<- pull_s3(paste0("analytics/projections/by_facet/", 'ncaa', "/%i/rushing.csv.gz"), season_start = 2014, season_end = 2021)
+ncaa_run_blocking <- pull_s3(paste0("analytics/projections/by_facet/", 'ncaa', "/%i/run_blocking.csv.gz"), season_start = 2014, season_end = 2021)
+
+ncaa_block_sums <- ncaa_run_blocking %>%
+  filter(!is.na(run_blocking_grade)) %>%
+  group_by(game_id, play_id) %>%
+  summarize(total_blocks = n(),
+            pos_blocks = sum(run_blocking_grade > 0),
+            neg_blocks = sum(run_blocking_grade < 0))
 
 ncaa_rushing_data <- ncaa_rushing_data %>%
   filter(!is.na(yards))
 
 ncaa_rushing_data <- ncaa_rushing_data %>%
   mutate(seconds_left_in_half = case_when(
-  quarter == 1 ~ seconds_left_in_quarter + 900,
-  quarter == 2 ~ seconds_left_in_quarter,
-  quarter == 3 ~ seconds_left_in_quarter + 900,
-  quarter == 4 ~ seconds_left_in_quarter,
+  quarter == 1 ~ as.double(seconds_left_in_quarter) + 900,
+  quarter == 2 ~ as.double(seconds_left_in_quarter),
+  quarter == 3 ~ as.double(seconds_left_in_quarter) + 900,
+  quarter == 4 ~ as.double(seconds_left_in_quarter),
   quarter >= 5 ~ 0
 ))
 
@@ -33,33 +44,34 @@ ncaa_rushing_data <- ncaa_rushing_data %>%
 
 nrow(ncaa_rushing_data)
 
-ncaa_rushing_data %>% 
-  filter(!is.na(box_players)) %>%
-  filter(box_players < 9) %>%
-  filter(box_players > 4) %>%
-  filter(distance <= 15) %>%
-  ggplot(aes(x = distance, y = yards, group = as.factor(box_players), color = as.factor(box_players))) +
-  geom_smooth(se = FALSE, size = 2) +
-  theme_reach() +
-  scale_color_brewer(palette = "Paired") +
-  labs(x = "Distance to Sticks",
-       y = "Yards Gained",
-       title = "How NCAA Rushing Yards Changes by Distance to Sticks and Defenders in the Box",
-       subtitle = "Using PFF data from 2015-2020, QB Kneeldowns excluded",
-       color = "Box Players") +
-  scale_x_reverse(breaks = pretty_breaks(n = 15)) +
-  scale_y_continuous(breaks = pretty_breaks(n = 10)) +
-  theme(legend.position = "bottom") +
-  facet_wrap(~half)
+# ncaa_rushing_data %>% 
+#   filter(!is.na(box_players)) %>%
+#   filter(box_players < 9) %>%
+#   filter(box_players > 4) %>%
+#   filter(distance <= 15) %>%
+#   ggplot(aes(x = distance, y = yards, group = as.factor(box_players), color = as.factor(box_players))) +
+#   geom_smooth(se = FALSE, size = 2) +
+#   theme_reach() +
+#   scale_color_brewer(palette = "Paired") +
+#   labs(x = "Distance to Sticks",
+#        y = "Yards Gained",
+#        title = "How NCAA Rushing Yards Changes by Distance to Sticks and Defenders in the Box",
+#        subtitle = "Using PFF data from 2015-2020, QB Kneeldowns excluded",
+#        color = "Box Players") +
+#   scale_x_reverse(breaks = pretty_breaks(n = 15)) +
+#   scale_y_continuous(breaks = pretty_breaks(n = 10)) +
+#   theme(legend.position = "bottom") +
+#   facet_wrap(~half)
 
 ncaa_def_ypc <- ncaa_rushing_data %>%
   dplyr::group_by(defense, season) %>%
   dplyr::summarize(snaps = n(),
             def_ypc = mean(yards)) %>%
-  filter(snaps >= 100)
+  filter(snaps >= 10)
 
 ncaa_rushing_data_join <- ncaa_rushing_data %>%
-  left_join(ncaa_def_ypc, by = c("defense", "season"))
+  left_join(ncaa_def_ypc, by = c("defense", "season")) %>%
+  left_join(ncaa_block_sums, by = c("game_id", "play_id"))
 
 ncaa_rushing_data_join$def_ypc[is.na(ncaa_rushing_data_join$def_ypc)] <- mean(ncaa_rushing_data_join$yards)
 
@@ -68,18 +80,20 @@ colSums(is.na(ncaa_rushing_data))
 ncaa_rushing_data_join <- ncaa_rushing_data_join %>%
   filter(!is.na(box_players)) %>%
   select(offense, defense, player, player_id, season, game_id, distance, down, concept_1,
-         quarter, seconds_left_in_half, yards_to_go, yards, box_players, def_ypc, score_diff)
+         quarter, seconds_left_in_half, yards_to_go, yards, box_players, def_ypc, score_diff,
+         total_blocks, pos_blocks, neg_blocks) %>%
+  filter(!is.na(total_blocks))
 
 colSums(is.na(ncaa_rushing_data_join))
 
 ncaa_rushing_model_data <- ncaa_rushing_data_join %>%
   select(distance, down, seconds_left_in_half, yards_to_go, 
-         yards, box_players, def_ypc, score_diff) %>%
+         yards, box_players, def_ypc, score_diff, total_blocks, pos_blocks, neg_blocks) %>%
   dplyr::rename(label = yards) %>%
   select(label, everything())
 
-ncaa_smp_size <- floor(0.70 * nrow(ncaa_rushing_model_data))
-set.seed(2016) #go blue
+ncaa_smp_size <- floor(0.50 * nrow(ncaa_rushing_model_data))
+set.seed(1991) #go lions
 ncaa_ind <- sample(seq_len(nrow(ncaa_rushing_model_data)), size = ncaa_smp_size)
 ncaa_train <- as.matrix(ncaa_rushing_model_data[ncaa_ind, ])
 ncaa_test <- as.matrix(ncaa_rushing_model_data[-ncaa_ind, ])
@@ -88,7 +102,7 @@ dim(ncaa_train)
 
 ncaa_ryoe_model <-
   xgboost(
-    data = ncaa_train[, 2:8],
+    data = ncaa_train[, 2:11],
     label = ncaa_train[, 1],
     nrounds = 1000,
     objective = "reg:squarederror",
@@ -97,10 +111,9 @@ ncaa_ryoe_model <-
     eta = .25
   )   
 
-ncaa_imp <- xgb.importance(colnames(ncaa_train), model = ncaa_ryoe_model)
-xgb.plot.importance(ncaa_imp)
+vip(ncaa_ryoe_model)
 
-pred_xgb <- predict(ncaa_ryoe_model, ncaa_test[, 2:8])
+pred_xgb <- predict(ncaa_ryoe_model, ncaa_test[, 2:11])
 
 yhat <- pred_xgb
 y <- ncaa_test[, 1]
@@ -114,7 +127,7 @@ xgb_test_rmse <- NULL
 for (j in 1:nrow(ncaa_hyper_grid)) {
   set.seed(123)
   m_xgb_untuned <- xgb.cv(
-    data = ncaa_train[, 2:7],
+    data = ncaa_train[, 2:11],
     label = ncaa_train[, 1],
     nrounds = 1000,
     objective = "reg:squarederror",
@@ -135,19 +148,18 @@ ncaa_hyper_grid[which.min(xgb_test_rmse), ]
 
 ncaa_rushing_model <-
   xgboost(
-    data = ncaa_train[, 2:8],
+    data = ncaa_train[, 2:11],
     label = ncaa_train[, 1],
     nrounds = 1000,
     objective = "reg:squarederror",
     early_stopping_rounds = 3,
     max_depth = 4, #ideal max depth
-    eta = 0.24 #ideal eta
+    eta = 0.21 #ideal eta
   )  
 
-ncaa_imp <- xgb.importance(colnames(ncaa_train), model = ncaa_rushing_model)
-xgb.plot.importance(ncaa_imp)
+vip(ncaa_rushing_model) + theme_reach() + labs(title = "Variable Importance for Expected Rushing Yards")
 
-pred_xgb <- predict(ncaa_ryoe_model, ncaa_test[, 2:8])
+pred_xgb <- predict(ncaa_ryoe_model, ncaa_test[, 2:11])
 
 yhat <- pred_xgb
 y <- ncaa_test[, 1]
@@ -164,6 +176,17 @@ f = mean(ncaa_ryoe_projs$yards) - mean(ncaa_ryoe_projs$exp_yards)
 
 ncaa_ryoe_projs <- ncaa_ryoe_projs %>%
   mutate(ryoe = yards - exp_yards + f)
+
+write.csv(ncaa_ryoe_projs, "ncaa_ryoe_projs.csv")
+
+ncaa_stats_21 <- ncaa_ryoe_projs %>%
+  filter(season == 2021) %>%
+  group_by(player, offense) %>%
+  summarize(rushes = n(),
+            actual_yards = round(mean(yards), 2),
+            exp_yards = round(mean(exp_yards), 2),
+            ryoe = round(mean(ryoe), 2)) %>%
+  filter(rushes >= 15)
 
 ###############################################################################
 ncaa_ryoe_projs <- ncaa_ryoe_projs %>%

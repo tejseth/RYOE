@@ -74,7 +74,7 @@ ids <- teams %>%
 ryoe_github <- ryoe_github %>%
   group_by(player) %>%
   mutate(count = n()) %>%
-  filter(count >= 10) %>%
+  filter(count >= 5) %>%
   ungroup()
 
 rushers <- unique(ryoe_github$player)
@@ -91,10 +91,10 @@ ui <- fluidPage(
         tabPanel("By Season",
            fluidRow(
              column(4, align = "center",
-                    sliderInput("year_range", "Year Range", value = c(2018, 2020), min = 2006, max = 2020, sep = ""),
+                    sliderInput("year_range", "Year Range", value = c(2019, 2021), min = 2006, max = 2021, sep = ""),
              ),
              column(7, align = "center",
-                    sliderInput("min_rushes", "Minimum Rushes", value = 300, min = 50, max = 1500),
+                    sliderInput("min_rushes", "Minimum Rushes", value = 100, min = 5, max = 1000),
              ),
            mainPanel(
              plotOutput(outputId = "rusher_graph",
@@ -118,14 +118,14 @@ ui <- fluidPage(
                         selectInput(
                           inputId =  "team_season",
                           label = "Season:",
-                          choices = 1999:2020,
-                          selected = 2020
+                          choices = 2006:2021,
+                          selected = 2021
                         ),
                         sliderInput(
                           inputId =  "team_min_rushes",
                           label = "Minimum Rushes:",
                           min = 1, max = 300,
-                          value = 50
+                          value = 5
                         ),
                     ),
                ),
@@ -152,7 +152,7 @@ ui <- fluidPage(
                                     c(sort(unique(as.character(rushers)))), selected = "Derrick Henry"),
                  ),
                  column(4, align = "center", 
-                 sliderInput("range_years", "Year Range", value = c(2018, 2020), min = 2006, max = 2020, sep = ""),
+                 sliderInput("range_years", "Year Range", value = c(2018, 2021), min = 2006, max = 2021, sep = ""),
                  sliderInput("week_range", "Weeks Range", value = c(1, 17), min = 1, max = 17),
                ),
                mainPanel(
